@@ -9,6 +9,7 @@ import (
 	"net/rpc"
 	"os"
 	"strings"
+	"sync"
 	"unicode"
 
 	mrpc "github.com/mnah05/map-reduce/internal/rpc"
@@ -36,19 +37,9 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-func RunMapWorker() {
-	client, err := rpc.Dial("tcp", mrpc.MasterAddress)
-	if err != nil {
-		log.Fatalf("Map worker failed to connect to master: %v", err)
-	}
-	defer client.Close()
-
-	if err := os.MkdirAll("mr-out", 0755); err != nil {
-		log.Fatalf("Map worker failed to create mr-out directory: %v", err)
-	}
-
+func processMapTasks(client *rpc.Client, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for {
-		// [1] Ask master for task
 		req := mrpc.GetMapTaskRequest{}
 		resp := mrpc.GetMapTaskResponse{}
 
@@ -56,12 +47,10 @@ func RunMapWorker() {
 			log.Fatalf("Map worker failed to get task: %v", err)
 		}
 		if resp.Filename == "" {
-			log.Println("Map worker: no more tasks")
 			break
 		}
 		log.Printf("Map worker got task: file=%s taskID=%d\n", resp.Filename, resp.TaskID)
 
-		// [2] Read input
 		f, err := os.Open(resp.Filename)
 		if err != nil {
 			log.Fatalf("Map worker failed to open input file %s: %v", resp.Filename, err)
@@ -77,10 +66,8 @@ func RunMapWorker() {
 		}
 		f.Close()
 
-		// [3] Run map function on given file
 		kva := mapFunc(resp.Filename, sb.String())
 
-		// [4] Write intermediate files
 		nReduce := 1
 		files := make([]*os.File, nReduce)
 		encoders := make([]*json.Encoder, nReduce)
@@ -107,7 +94,6 @@ func RunMapWorker() {
 			intermediateFiles = append(intermediateFiles, fmt.Sprintf("mr-out/mr-%d-%d", resp.TaskID, i))
 		}
 
-		// [5] Tell master we're done
 		doneReq := mrpc.MapDoneRequest{IntermediateFiles: intermediateFiles}
 		doneResp := mrpc.MapDoneResponse{}
 		if err := client.Call("Master.MapDone", &doneReq, &doneResp); err != nil {
@@ -115,5 +101,25 @@ func RunMapWorker() {
 		}
 		log.Printf("Map worker: task %d done, reported to master", resp.TaskID)
 	}
+}
+
+func RunMapWorker() {
+	client, err := rpc.Dial("tcp", mrpc.MasterAddress)
+	if err != nil {
+		log.Fatalf("Map worker failed to connect to master: %v", err)
+	}
+	defer client.Close()
+
+	if err := os.MkdirAll("mr-out", 0755); err != nil {
+		log.Fatalf("Map worker failed to create mr-out directory: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	numWorkers := 3
+	for range numWorkers {
+		wg.Add(1)
+		go processMapTasks(client, &wg)
+	}
+	wg.Wait()
 	log.Println("Map worker: all done")
 }

@@ -7,6 +7,7 @@ build:
 
 run: build
 	@echo "=== Starting MapReduce ==="
+	-kill -9 $$(lsof -ti:1234) 2>/dev/null
 	rm -rf mr-out
 	./bin/master &
 	MASTER_PID=$$!; \
