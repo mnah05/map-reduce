@@ -22,7 +22,7 @@ type KV struct {
 }
 
 // mapFunc splits file contents into words and emits a KV ("word", "1") for each word.
-func mapFunc(filename string, contents string) []KV {
+func mapFunc(contents string) []KV {
 	words := strings.FieldsFunc(contents, func(r rune) bool {
 		return !unicode.IsLetter(r)
 	})
@@ -65,7 +65,7 @@ func processMapTasks(client *rpc.Client, wg *sync.WaitGroup) {
 			log.Fatalf("Map worker failed to read input file %s: %v", resp.Filename, err)
 		}
 
-		kva := mapFunc(resp.Filename, string(contents))
+		kva := mapFunc(string(contents))
 
 		files := make([]*os.File, resp.NReduce)
 		encoders := make([]*json.Encoder, resp.NReduce)

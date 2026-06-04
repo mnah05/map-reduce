@@ -15,7 +15,7 @@ import (
 )
 
 // reduceFunc sums all values for a given key and returns the total as a string.
-func reduceFunc(key string, values []string) string {
+func reduceFunc(values []string) string {
 	total := 0
 	for _, v := range values {
 		n, _ := strconv.Atoi(v)
@@ -92,7 +92,7 @@ func processReduceTask(client *rpc.Client) {
 		for k := i; k < j; k++ {
 			values = append(values, kva[k].Val)
 		}
-		output := reduceFunc(kva[i].Key, values)
+		output := reduceFunc(values)
 		fmt.Fprintf(outFile, "%v %v\n", kva[i].Key, output)
 		i = j
 	}
