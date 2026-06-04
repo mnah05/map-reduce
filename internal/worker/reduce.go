@@ -1,4 +1,3 @@
-// internal/worker/reduce.go
 package worker
 
 import (
@@ -9,11 +8,11 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"time"
 
 	mrpc "github.com/mnah05/map-reduce/internal/rpc"
 )
 
-// Your reduce function — sums up all the "1"s for a word
 func reduceFunc(key string, values []string) string {
 	total := 0
 	for _, v := range values {
@@ -30,15 +29,16 @@ func RunReduceWorker() {
 	}
 	defer client.Close()
 
-	// [1] Ask master for task (blocks until map is done)
 	req := mrpc.GetReduceTaskRequest{}
 	resp := mrpc.GetReduceTaskResponse{}
-	if err := client.Call("Master.GetReduceTask", &req, &resp); err != nil {
-		log.Fatalf("Reduce worker failed to get task: %v", err)
+	for {
+		if err := client.Call("Master.GetReduceTask", &req, &resp); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
 	}
 	log.Println("Reduce worker got task, reading files:", resp.IntermediateFiles)
 
-	// [2] Read all intermediate files
 	var kva []KV
 	for _, fname := range resp.IntermediateFiles {
 		f, err := os.Open(fname)
@@ -56,7 +56,6 @@ func RunReduceWorker() {
 		f.Close()
 	}
 
-	// [3] Sort by key
 	sort.Slice(kva, func(i, j int) bool {
 		return kva[i].Key < kva[j].Key
 	})
@@ -65,7 +64,6 @@ func RunReduceWorker() {
 		log.Fatalf("Reduce worker failed to create mr-out directory: %v", err)
 	}
 
-	// [5] Run reduce on each key group, write output
 	outFile, err := os.Create("mr-out/mr-out-0")
 	if err != nil {
 		log.Fatalf("Reduce worker failed to create output file: %v", err)
@@ -87,11 +85,13 @@ func RunReduceWorker() {
 	}
 	outFile.Close()
 
-	// [6] Tell master we're done
 	doneReq := mrpc.ReduceDoneRequest{}
 	doneResp := mrpc.ReduceDoneResponse{}
-	if err := client.Call("Master.ReduceDone", &doneReq, &doneResp); err != nil {
-		log.Fatalf("Reduce worker failed to report done: %v", err)
+	for {
+		if err := client.Call("Master.ReduceDone", &doneReq, &doneResp); err == nil {
+			break
+		}
+		time.Sleep(time.Second)
 	}
 	log.Println("Reduce worker done")
 }

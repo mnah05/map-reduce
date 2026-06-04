@@ -7,9 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	mrpc "github.com/mnah05/map-reduce/internal/rpc"
 )
+
+const mapTaskTimeout = 10 * time.Second
 
 type TaskStatus int
 
@@ -64,6 +67,15 @@ func (m *Master) GetMapTask(req *mrpc.GetMapTaskRequest, resp *mrpc.GetMapTaskRe
 			resp.Filename = task.Filename
 			resp.TaskID = task.ID
 			log.Printf("Master: assigned map task %d (%s)", task.ID, task.Filename)
+			go func(taskID int) {
+				time.Sleep(mapTaskTimeout)
+				m.mu.Lock()
+				if taskID < len(m.MapTask) && m.MapTask[taskID].Status == InProgress {
+					m.MapTask[taskID].Status = Idle
+					log.Printf("Master: map task %d timed out, reset to Idle", taskID)
+				}
+				m.mu.Unlock()
+			}(task.ID)
 			return nil
 		}
 	}
@@ -73,24 +85,19 @@ func (m *Master) GetMapTask(req *mrpc.GetMapTaskRequest, resp *mrpc.GetMapTaskRe
 
 func (m *Master) MapDone(req *mrpc.MapDoneRequest, resp *mrpc.MapDoneResponse) error {
 	m.mu.Lock()
-	var taskID int
-	found := false
-	for i, task := range m.MapTask {
-		if task.Status == InProgress {
-			m.MapTask[i].Status = Done
-			taskID = task.ID
-			found = true
-			break
-		}
-	}
-	if found {
-		m.intermediateFiles = append(m.intermediateFiles, req.IntermediateFiles...)
-		log.Printf("Master: map task %d done, intermediate files: %v", taskID, req.IntermediateFiles)
-	} else {
-		log.Println("Master: MapDone called but no in-progress task found")
+	if req.TaskID < 0 || req.TaskID >= len(m.MapTask) {
+		log.Printf("Master: MapDone called with invalid task ID %d", req.TaskID)
 		m.mu.Unlock()
 		return nil
 	}
+	if m.MapTask[req.TaskID].Status != InProgress {
+		log.Printf("Master: MapDone called for task %d but status is %v (may have timed out or been already done)", req.TaskID, m.MapTask[req.TaskID].Status)
+		m.mu.Unlock()
+		return nil
+	}
+	m.MapTask[req.TaskID].Status = Done
+	m.intermediateFiles = append(m.intermediateFiles, req.IntermediateFiles...)
+	log.Printf("Master: map task %d done, intermediate files: %v", req.TaskID, req.IntermediateFiles)
 	allDone := true
 	for _, task := range m.MapTask {
 		if task.Status != Done {

@@ -10,6 +10,7 @@ type GetMapTaskResponse struct {
 	TaskID   int
 }
 type MapDoneRequest struct {
+	TaskID            int
 	IntermediateFiles []string
 }
 type MapDoneResponse struct{}

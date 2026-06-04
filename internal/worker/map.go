@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -10,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	mrpc "github.com/mnah05/map-reduce/internal/rpc"
@@ -42,31 +42,24 @@ func processMapTasks(client *rpc.Client, wg *sync.WaitGroup) {
 	for {
 		req := mrpc.GetMapTaskRequest{}
 		resp := mrpc.GetMapTaskResponse{}
-
-		if err := client.Call("Master.GetMapTask", &req, &resp); err != nil {
-			log.Fatalf("Map worker failed to get task: %v", err)
+		for {
+			if err := client.Call("Master.GetMapTask", &req, &resp); err == nil {
+				break
+			}
+			time.Sleep(time.Second)
 		}
+
 		if resp.Filename == "" {
 			break
 		}
 		log.Printf("Map worker got task: file=%s taskID=%d\n", resp.Filename, resp.TaskID)
 
-		f, err := os.Open(resp.Filename)
+		contents, err := os.ReadFile(resp.Filename)
 		if err != nil {
-			log.Fatalf("Map worker failed to open input file %s: %v", resp.Filename, err)
+			log.Fatalf("Map worker failed to read input file %s: %v", resp.Filename, err)
 		}
-		var sb strings.Builder
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			sb.WriteString(scanner.Text())
-			sb.WriteByte('\n')
-		}
-		if err := scanner.Err(); err != nil {
-			log.Fatalf("Map worker error reading input file: %v", err)
-		}
-		f.Close()
 
-		kva := mapFunc(resp.Filename, sb.String())
+		kva := mapFunc(resp.Filename, string(contents))
 
 		nReduce := 1
 		files := make([]*os.File, nReduce)
@@ -94,10 +87,13 @@ func processMapTasks(client *rpc.Client, wg *sync.WaitGroup) {
 			intermediateFiles = append(intermediateFiles, fmt.Sprintf("mr-out/mr-%d-%d", resp.TaskID, i))
 		}
 
-		doneReq := mrpc.MapDoneRequest{IntermediateFiles: intermediateFiles}
+		doneReq := mrpc.MapDoneRequest{TaskID: resp.TaskID, IntermediateFiles: intermediateFiles}
 		doneResp := mrpc.MapDoneResponse{}
-		if err := client.Call("Master.MapDone", &doneReq, &doneResp); err != nil {
-			log.Fatalf("Map worker failed to report done to master: %v", err)
+		for {
+			if err := client.Call("Master.MapDone", &doneReq, &doneResp); err == nil {
+				break
+			}
+			time.Sleep(time.Second)
 		}
 		log.Printf("Map worker: task %d done, reported to master", resp.TaskID)
 	}
