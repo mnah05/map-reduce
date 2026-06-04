@@ -2,8 +2,7 @@
 
 build:
 	go build -o bin/master cmd/main/main.go
-	go build -o bin/map cmd/map/map-main.go
-	go build -o bin/reduce cmd/reduce/reduce-main.go
+	go build -o bin/worker cmd/worker/main.go
 
 run: build
 	@echo "=== Starting MapReduce ==="
@@ -12,11 +11,12 @@ run: build
 	./bin/master &
 	MASTER_PID=$$!; \
 	sleep 1; \
-	./bin/map; \
-	sleep 1; \
-	./bin/reduce; \
+	./bin/worker & \
+	./bin/worker & \
+	./bin/worker & \
+	wait; \
 	kill $$MASTER_PID 2>/dev/null || true
-	@echo "=== Done! Output in mr-out/mr-out-0 ==="
+	@echo "=== Done! Output in mr-out/ ==="
 
 clean:
 	rm -rf bin mr-out

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"time"
@@ -13,6 +14,7 @@ import (
 	mrpc "github.com/mnah05/map-reduce/internal/rpc"
 )
 
+// reduceFunc sums all values for a given key and returns the total as a string.
 func reduceFunc(key string, values []string) string {
 	total := 0
 	for _, v := range values {
@@ -22,14 +24,11 @@ func reduceFunc(key string, values []string) string {
 	return strconv.Itoa(total)
 }
 
-func RunReduceWorker() {
-	client, err := rpc.Dial("tcp", mrpc.MasterAddress)
-	if err != nil {
-		log.Fatal("Reduce worker failed to connect to master:", err)
-	}
-	defer client.Close()
-
-	req := mrpc.GetReduceTaskRequest{}
+// processReduceTask claims a reduce bucket from the Master via RPC,
+// reads all intermediate files for that bucket, groups by key,
+// applies the reduce function, and writes the final output.
+func processReduceTask(client *rpc.Client) {
+	req := mrpc.Empty{}
 	resp := mrpc.GetReduceTaskResponse{}
 	for {
 		if err := client.Call("Master.GetReduceTask", &req, &resp); err == nil {
@@ -37,10 +36,23 @@ func RunReduceWorker() {
 		}
 		time.Sleep(time.Second)
 	}
-	log.Println("Reduce worker got task, reading files:", resp.IntermediateFiles)
+
+	if resp.Bucket < 0 {
+		log.Println("Reduce worker: no reduce task assigned")
+		return
+	}
+	log.Printf("Reduce worker got bucket %d / %d\n", resp.Bucket, resp.NReduce)
+
+	// Gather all intermediate files for this bucket (mr-*-<bucket>)
+	pattern := fmt.Sprintf("mr-out/mr-*-%d", resp.Bucket)
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		log.Fatalf("Reduce worker failed to glob intermediate files: %v", err)
+	}
+	log.Printf("Reduce worker: reading %d files for bucket %d", len(matches), resp.Bucket)
 
 	var kva []KV
-	for _, fname := range resp.IntermediateFiles {
+	for _, fname := range matches {
 		f, err := os.Open(fname)
 		if err != nil {
 			log.Fatalf("Reduce worker failed to open intermediate file %s: %v", fname, err)
@@ -56,6 +68,7 @@ func RunReduceWorker() {
 		f.Close()
 	}
 
+	// Sort by key so we can group consecutive records
 	sort.Slice(kva, func(i, j int) bool {
 		return kva[i].Key < kva[j].Key
 	})
@@ -64,7 +77,7 @@ func RunReduceWorker() {
 		log.Fatalf("Reduce worker failed to create mr-out directory: %v", err)
 	}
 
-	outFile, err := os.Create("mr-out/mr-out-0")
+	outFile, err := os.Create(fmt.Sprintf("mr-out/mr-out-%d", resp.Bucket))
 	if err != nil {
 		log.Fatalf("Reduce worker failed to create output file: %v", err)
 	}
@@ -85,13 +98,13 @@ func RunReduceWorker() {
 	}
 	outFile.Close()
 
-	doneReq := mrpc.ReduceDoneRequest{}
-	doneResp := mrpc.ReduceDoneResponse{}
+	doneReq := mrpc.ReduceDoneRequest{Bucket: resp.Bucket}
+	doneResp := mrpc.Empty{}
 	for {
 		if err := client.Call("Master.ReduceDone", &doneReq, &doneResp); err == nil {
 			break
 		}
 		time.Sleep(time.Second)
 	}
-	log.Println("Reduce worker done")
+	log.Printf("Reduce worker: bucket %d done", resp.Bucket)
 }
